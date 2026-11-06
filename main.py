@@ -8,7 +8,7 @@ import os
 import re
 import struct
 
-TOKEN = os.getenv("DISCORD_BOT_TOKEN") or getpass.getpass("Nhap BOT TOKEN moi: ")
+TOKEN = os.getenv("MTU2ODE0MzczMTIxODE5MDM1Nw.GC46pf.pulf_aXLy65QSshUCCcljh_fjFCVjbQeOLmg8U") or getpass.getpass("Nhap BOT TOKEN moi: ")
 
 FILE_PATTERN = re.compile(r"^assetindexer\.[A-Za-z0-9~]+$")
 MAX_SIZE = 20 * 1024 * 1024
