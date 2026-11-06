@@ -8,7 +8,7 @@ import os
 import re
 import struct
 
-TOKEN = os.getenv("MTU2ODE0MzczMTIxODE5MDM1Nw.GpHJ4l.4YyVUQoKhEePsn2QUwEdO9lszfLjZmELSQ7ZSo") or getpass.getpass("Nhap BOT TOKEN moi: ")
+TOKEN = os.getenv("DISCORD_BOT_TOKEN") or getpass.getpass("Nhap BOT TOKEN moi: ")
 
 FILE_PATTERN = re.compile(r"^assetindexer\.[A-Za-z0-9~]+$")
 MAX_SIZE = 20 * 1024 * 1024
@@ -27,17 +27,25 @@ KEYWORDS = {
                 "ankle", "đùi", "đầu gối", "cổ chân", "bàn chân"]
 }
 
+LIMB_KEYWORDS = (
+    "arm", "tay", "hand", "shoulder", "elbow", "wrist",
+    "cánh tay", "bàn tay", "vai", "khuỷu",
+    "leg", "chân", "foot", "thigh", "knee", "ankle",
+    "đùi", "đầu gối", "cổ chân", "bàn chân"
+)
+
 FUNCTIONS = [
-    ("scaleFull", "📏 Scale Full"),
-    ("scaleHead", "🗿 Scale Head"),
-    ("scaleNeck", "🦒 Scale Neck"),
-    ("scaleArm", "💪 Scale Arm"),
-    ("scaleLeg", "🦵 Scale Leg"),
-    ("moveFull", "↕️ Move Full"),
-    ("flipHead", "🔄 Flip Head"),
-    ("flipArm", "🔄 Flip Arm"),
-    ("flipLeg", "🔄 Flip Leg"),
-    ("checksum", "🔐 Fix Checksum")
+    ("scaleFull", "Scale Full"),
+    ("scaleHead", "Scale Head"),
+    ("scaleNeck", "Scale Neck"),
+    ("scaleArm", "Scale Arm"),
+    ("scaleLeg", "Scale Leg"),
+    ("moveFull", "Move Full"),
+    ("flipHead", "Flip Head"),
+    ("flipArm", "Flip Arm"),
+    ("flipLeg", "Flip Leg"),
+    ("fixLimbs", "Fix Tay Chan Binh Thuong"),
+    ("checksum", "Fix Checksum")
 ]
 
 
@@ -56,42 +64,45 @@ def parse_binary(data):
     bones = []
     seen = set()
 
+    def safe_float(buf, off):
+        try:
+            v = struct.unpack_from("<f", buf, off)[0]
+        except Exception:
+            return None
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        return v
+
     for match in re.finditer(rb"bone_[A-Za-z0-9_~.-]+", data):
         name = match.group().decode("utf-8", errors="ignore")
-
         if name in seen:
             continue
-
         seen.add(name)
+
         start = match.start()
         end = match.end()
 
         pos_offset = None
+        scale_offset = None
 
-        for offset in range(max(0, start - 100), min(len(data) - 12, end + 100)):
-            values = [
-                read_float(data, offset),
-                read_float(data, offset + 4),
-                read_float(data, offset + 8)
-            ]
+        candidates = list(range(max(0, start - 100), min(len(data) - 12, end + 100)))
+        candidates.sort(key=lambda o: min(abs(o - start), abs(o - end)))
 
-            if all(v is not None and -10 <= v <= 10 for v in values):
+        for offset in candidates:
+            v = [safe_float(data, offset + i * 4) for i in range(3)]
+            if all(x is not None and -10.0 <= x <= 10.0 for x in v):
                 pos_offset = offset
                 break
 
-        scale_offset = None
-
         if pos_offset is not None:
             for offset in range(pos_offset + 12, min(len(data) - 12, pos_offset + 40)):
-                values = [
-                    read_float(data, offset),
-                    read_float(data, offset + 4),
-                    read_float(data, offset + 8)
-                ]
-
-                if all(v is not None and 0.01 <= v <= 100 for v in values):
+                v = [safe_float(data, offset + i * 4) for i in range(3)]
+                if all(x is not None and 0.01 <= x <= 100.0 for x in v):
                     scale_offset = offset
                     break
+
+        if scale_offset is None:
+            continue
 
         bones.append({
             "name": name.lower(),
@@ -103,24 +114,18 @@ def parse_binary(data):
 
 
 def select_bones(bones, function):
-    if function in ("scaleFull", "moveFull", "checksum"):
+    if function in ("scaleFull", "moveFull", "checksum", "fixLimbs"):
         return bones
-
     keywords = KEYWORDS.get(function, [])
-    return [
-        bone for bone in bones
-        if any(word in bone["name"] for word in keywords)
-    ]
+    return [b for b in bones if any(w in b["name"] for w in keywords)]
 
 
 def fix_checksum(data):
     marker = data.find(b"CAB-")
-
     if marker < 0:
         return data
 
     start = marker + 4
-
     if start + 32 > len(data):
         return data
 
@@ -129,7 +134,6 @@ def fix_checksum(data):
 
     checksum = hashlib.md5(temp).hexdigest().upper().encode("ascii")
     data[start:start + 32] = checksum
-
     return data
 
 
@@ -138,6 +142,18 @@ def process_data(original, bones, function, value=None):
 
     if function == "checksum":
         return fix_checksum(data), 1
+
+    if function == "fixLimbs":
+        changed = 0
+        for bone in bones:
+            if bone["scale"] is None:
+                continue
+            if not any(w in bone["name"] for w in LIMB_KEYWORDS):
+                continue
+            for i in range(3):
+                write_float(data, bone["scale"] + i * 4, 1.0)
+            changed += 1
+        return fix_checksum(data), changed
 
     targets = select_bones(bones, function)
     changed = 0
@@ -149,26 +165,31 @@ def process_data(original, bones, function, value=None):
         if function.startswith("scale"):
             if scale is None:
                 continue
-
             for i in range(3):
                 old = read_float(data, scale + i * 4)
-                write_float(data, scale + i * 4, old * value)
-
+                if old is None:
+                    continue
+                new = old * value
+                new = max(-100.0, min(100.0, new))
+                write_float(data, scale + i * 4, new)
             changed += 1
 
         elif function == "moveFull":
             if pos is None:
                 continue
-
             old = read_float(data, pos + 4)
-            write_float(data, pos + 4, old + value)
+            if old is None:
+                continue
+            new = max(-10.0, min(10.0, old + value))
+            write_float(data, pos + 4, new)
             changed += 1
 
         elif function.startswith("flip"):
             if scale is None:
                 continue
-
             old = read_float(data, scale + 4)
+            if old is None:
+                continue
             write_float(data, scale + 4, -old)
             changed += 1
 
@@ -182,8 +203,8 @@ class ValueModal(discord.ui.Modal):
         self.function = function
 
         self.number = discord.ui.TextInput(
-            label="Nhập giá trị",
-            placeholder="Ví dụ: 1.5 hoặc 0.1",
+            label="Nhap gia tri",
+            placeholder="Vi du: 1.5 hoac 0.1",
             required=True,
             max_length=12
         )
@@ -192,20 +213,15 @@ class ValueModal(discord.ui.Modal):
     async def on_submit(self, interaction):
         try:
             value = float(str(self.number.value))
-
             if not (-100 <= value <= 100):
                 raise ValueError()
-
             if self.function.startswith("scale") and value <= 0:
                 raise ValueError()
 
-            await self.parent_view.run_function(
-                interaction, self.function, value
-            )
-
+            await self.parent_view.run_function(interaction, self.function, value)
         except ValueError:
             await interaction.response.send_message(
-                "❌ Giá trị không hợp lệ!",
+                "Gia tri khong hop le!",
                 ephemeral=True
             )
 
@@ -216,16 +232,15 @@ class FunctionSelect(discord.ui.Select):
             discord.SelectOption(label=name, value=key)
             for key, name in FUNCTIONS
         ]
-
         super().__init__(
-            placeholder="⚙️ CHỌN CHỨC NĂNG UMA",
+            placeholder="CHON CHUC NANG UMA",
             options=options
         )
 
     async def callback(self, interaction):
         self.view.selected = self.values[0]
         await interaction.response.send_message(
-            f"✅ Đã chọn: **{self.values[0]}**",
+            f"Da chon: {self.values[0]}",
             ephemeral=True
         )
 
@@ -245,20 +260,20 @@ class ToolView(discord.ui.View):
     async def interaction_check(self, interaction):
         if interaction.user.id != self.owner:
             await interaction.response.send_message(
-                "❌ Đây không phải phiên làm việc của bạn.",
+                "Day khong phai phien lam viec cua ban.",
                 ephemeral=True
             )
             return False
         return True
 
     @discord.ui.button(
-        label="▶ XỬ LÝ FILE",
+        label="XU LY FILE",
         style=discord.ButtonStyle.primary
     )
     async def run_button(self, interaction, button):
         if not self.selected:
             await interaction.response.send_message(
-                "⚠️ Hãy chọn chức năng trước!",
+                "Hay chon chuc nang truoc!",
                 ephemeral=True
             )
             return
@@ -266,20 +281,18 @@ class ToolView(discord.ui.View):
         function = self.selected
 
         if function.startswith("scale") or function == "moveFull":
-            await interaction.response.send_modal(
-                ValueModal(self, function)
-            )
+            await interaction.response.send_modal(ValueModal(self, function))
         else:
             await self.run_function(interaction, function)
 
     @discord.ui.button(
-        label="📥 LƯU / NHẬN FILE",
+        label="LUU / NHAN FILE",
         style=discord.ButtonStyle.success
     )
     async def download_button(self, interaction, button):
         if self.result is None:
             await interaction.response.send_message(
-                "⚠️ Bạn chưa xử lý file!",
+                "Ban chua xu ly file!",
                 ephemeral=True
             )
             return
@@ -290,7 +303,7 @@ class ToolView(discord.ui.View):
         )
 
         await interaction.response.send_message(
-            "✅ FILE ĐÃ XỬ LÝ XONG!",
+            "FILE DA XU LY XONG!",
             file=file,
             ephemeral=True
         )
@@ -308,16 +321,15 @@ class ToolView(discord.ui.View):
             self.result = result
 
             await interaction.response.send_message(
-                f"✅ **XỬ LÝ THÀNH CÔNG**\n"
-                f"Chức năng: `{function}`\n"
-                f"Số bone xử lý: `{changed}`\n"
-                f"Nhấn **LƯU / NHẬN FILE** để lấy file.",
+                f"XU LY THANH CONG\n"
+                f"Chuc nang: {function}\n"
+                f"So bone xu ly: {changed}\n"
+                f"Nhan LUU / NHAN FILE de lay file.",
                 ephemeral=True
             )
-
         except Exception as error:
             await interaction.response.send_message(
-                f"❌ Lỗi xử lý: `{error}`",
+                f"Loi xu ly: {error}",
                 ephemeral=True
             )
 
@@ -338,22 +350,21 @@ async def on_ready():
 
 @bot.tree.command(
     name="uma",
-    description="Mở VC UMA BONE PRO"
+    description="Mo VC UMA BONE PRO"
 )
 async def uma(interaction: discord.Interaction, file: discord.Attachment):
     filename = file.filename
 
     if not FILE_PATTERN.fullmatch(filename):
         await interaction.response.send_message(
-            "❌ Tên file không đúng định dạng!\n"
-            "Yêu cầu: `assetindexer.xxx`",
+            "Ten file khong dung dinh dang!\nYeu cau: assetindexer.xxx",
             ephemeral=True
         )
         return
 
     if file.size > MAX_SIZE:
         await interaction.response.send_message(
-            "❌ File vượt quá giới hạn 20MB!",
+            "File vuot qua gioi han 20MB!",
             ephemeral=True
         )
         return
@@ -366,7 +377,7 @@ async def uma(interaction: discord.Interaction, file: discord.Attachment):
 
         if not bones:
             await interaction.followup.send(
-                "❌ Không tìm thấy bone trong file.",
+                "Khong tim thay bone trong file.",
                 ephemeral=True
             )
             return
@@ -379,14 +390,12 @@ async def uma(interaction: discord.Interaction, file: discord.Attachment):
         )
 
         embed = discord.Embed(
-            title="⚡ VC UMA BONE PRO",
+            title="VC UMA BONE PRO",
             description=(
-                "━━━━━━━━━━━━━━━━━━\n"
-                "📂 File đã nhận thành công\n"
-                f"📄 `{filename}`\n"
-                f"🦴 Bone tìm thấy: `{len(bones)}`\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "Chọn chức năng bên dưới để xử lý."
+                "File da nhan thanh cong\n"
+                f"File: {filename}\n"
+                f"Bone tim thay: {len(bones)}\n"
+                "Chon chuc nang ben duoi de xu ly."
             ),
             color=0x00BFFF
         )
@@ -396,10 +405,9 @@ async def uma(interaction: discord.Interaction, file: discord.Attachment):
             view=view,
             ephemeral=True
         )
-
     except Exception as error:
         await interaction.followup.send(
-            f"❌ Không đọc được file: `{error}`",
+            f"Khong doc duoc file: {error}",
             ephemeral=True
         )
 
