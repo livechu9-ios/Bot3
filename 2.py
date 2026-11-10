@@ -1,201 +1,188 @@
+# -*- coding: utf-8 -*-
+"""
+VC UDID VERIFY - Telegram Bot
+Chuyen tu Discord (2.py) sang Telegram
+"""
 
-import discord
-from discord import app_commands
+import telebot
+from telebot import types
 
 # =================================
-# VC UDID VERIFY - CONFIG
+# CONFIG
 # =================================
 
-APPLICATION_ID = "1569717539083255938"
-TOKEN = input("MTU2OTcxNzUzOTA4MzI1NTkzOA.GEJFKh.gkyaThtGqyXArg0dZRpDwTnFnOTkUOy5ktoTU8 ").strip()
-
+BOT_TOKEN = "9093083128:AAEN_pqXRabqdnRK159MXy2nN6tngpdu9J8"   # <-- Thay token bot Telegram
 UDID_URL = "https://udid.tech"
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Lưu user đã xác minh UDID
 verified_users = set()
 
 
 # =================================
-# UDID VERIFY MENU
+# KEYBOARD BUILDERS
 # =================================
 
-class UDIDView(discord.ui.View):
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-        self.add_item(discord.ui.Button(
-            label="LAY UDID",
-            style=discord.ButtonStyle.link,
-            url=UDID_URL
-        ))
-
-    @discord.ui.button(
-        label="DA XAC MINH UDID",
-        style=discord.ButtonStyle.success,
-        custom_id="vc_verify_udid"
+def udid_keyboard():
+    """Menu chính: LẤY UDID (link) + ĐÃ XÁC MINH UDID"""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("LẤY UDID", url=UDID_URL),
+        types.InlineKeyboardButton(
+            "ĐÃ XÁC MINH UDID",
+            callback_data="vc_verify_udid"
+        )
     )
-    async def verify(self, interaction, button):
+    return markup
 
-        verified_users.add(interaction.user.id)
 
-        embed = discord.Embed(
-            title="VC | XAC MINH THANH CONG",
-            description=(
-                "Ban da xac nhan UDID!\n\n"
-                "Hay chon chuc nang ben duoi."
-            ),
-            color=discord.Color.green()
+def function_keyboard(confirm_enabled=False):
+    """Menu chức năng sau khi xác minh"""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "NHẤY TẦM OPTIMION",
+            callback_data="choose_func"
         )
-
-        await interaction.response.send_message(
-            embed=embed,
-            view=FunctionView(),
-            ephemeral=True
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            "XÁC NHẬN LỰA CHỌN",
+            callback_data="confirm_func"
+        ) if confirm_enabled else
+        types.InlineKeyboardButton(
+            "XÁC NHẬN (chưa chọn)",
+            callback_data="confirm_disabled"
         )
+    )
+    return markup
 
 
 # =================================
-# FUNCTION MENU
+# /start - MENU CHÍNH
 # =================================
 
-class FunctionView(discord.ui.View):
+@bot.message_handler(commands=["start", "setup"])
+def cmd_start(message):
+    text = (
+        "—————————————\n"
+        "VC UDID VERIFY\n"
+        "—————————————\n\n"
+        "1. LẤY UDID\n"
+        "Nhấn nút LẤY UDID.\n\n"
+        "2. XÁC MINH\n"
+        "Nhấn ĐÃ XÁC MINH UDID.\n\n"
+        "3. CHỌN CHỨC NĂNG\n"
+        "NHẦY TẦM OPTIMION.\n"
+        "—————————————\n"
+        "VC SYSTEM | UDID VERIFY"
+    )
+    bot.send_message(
+        message.chat.id,
+        text,
+        reply_markup=udid_keyboard()
+    )
 
-    def __init__(self):
-        super().__init__(timeout=300)
-        self.selected = False
 
-    async def interaction_check(self, interaction):
+# =================================
+# XỬ LÝ CALLBACK
+# =================================
 
-        if interaction.user.id not in verified_users:
-            await interaction.response.send_message(
-                "Vui long xac minh UDID truoc!",
-                ephemeral=True
+@bot.callback_query_handler(func=lambda c: True)
+def on_callback(call):
+    try:
+        uid = call.from_user.id
+
+        # --- BƯỚC 1: XÁC MINH UDID ---
+        if call.data == "vc_verify_udid":
+            verified_users.add(uid)
+            text = (
+                "VC | XÁC MINH THÀNH CÔNG\n\n"
+                "Bạn đã xác nhận UDID!\n\n"
+                "Hãy chọn chức năng bên dưới."
             )
-            return False
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=function_keyboard(confirm_enabled=False)
+            )
+            bot.answer_callback_query(call.id, "Đã xác minh UDID")
+            return
 
-        return True
-
-    @discord.ui.button(
-        label="NHAY TAM OPTIMION",
-        style=discord.ButtonStyle.primary
-    )
-    async def choose(self, interaction, button):
-
-        self.selected = True
-
-        for item in self.children:
-            if item.label == "XAC NHAN LUA CHON":
-                item.disabled = False
-
-        embed = discord.Embed(
-            title="NHAY TAM OPTIMION",
-            description=(
-                "Da chon chuc nang:\n\n"
-                "NHAY TAM OPTIMION\n\n"
-                "Nhan XAC NHAN de hoan tat."
-            ),
-            color=discord.Color.blue()
-        )
-
-        await interaction.response.edit_message(
-            embed=embed,
-            view=self
-        )
-
-    @discord.ui.button(
-        label="XAC NHAN LUA CHON",
-        style=discord.ButtonStyle.success,
-        disabled=True
-    )
-    async def confirm(self, interaction, button):
-
-        if not self.selected:
-            await interaction.response.send_message(
-                "Ban chua chon chuc nang!",
-                ephemeral=True
+        # --- KIỂM TRA ĐÃ XÁC MINH CHƯA ---
+        if uid not in verified_users:
+            bot.answer_callback_query(
+                call.id,
+                "Vui lòng xác minh UDID trước!",
+                show_alert=True
             )
             return
 
-        embed = discord.Embed(
-            title="VC | HOAN TAT",
-            description=(
-                "Xac nhan thanh cong!\n\n"
-                "UDID: Da xac nhan thu cong\n"
-                "Chuc nang: NHAY TAM OPTIMION\n"
-                "Trang thai: HOAN TAT"
-            ),
-            color=discord.Color.green()
-        )
+        # --- BƯỚC 2: CHỌN CHỨC NĂNG ---
+        if call.data == "choose_func":
+            text = (
+                "NHẦY TẦM OPTIMION\n\n"
+                "Đã chọn chức năng:\n"
+                "NHẦY TẦM OPTIMION\n\n"
+                "Nhấn XÁC NHẬN để hoàn tất."
+            )
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=function_keyboard(confirm_enabled=True)
+            )
+            bot.answer_callback_query(call.id, "Đã chọn chức năng")
+            return
 
-        await interaction.response.edit_message(
-            embed=embed,
-            view=None
-        )
+        # --- BƯỚC 3: XÁC NHẬN ---
+        if call.data == "confirm_func":
+            text = (
+                "VC | HOÀN TẤT\n\n"
+                "Xác nhận thành công!\n\n"
+                "UDID: Đã xác nhận thủ công\n"
+                "Chức năng: NHẦY TẦM OPTIMION\n"
+                "Trạng thái: HOÀN TẤT"
+            )
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=None
+            )
+            bot.answer_callback_query(call.id, "Hoàn tất")
+            return
+
+        # --- BẤM XÁC NHẬN KHI CHƯA CHỌN ---
+        if call.data in ("confirm_disabled",):
+            bot.answer_callback_query(
+                call.id,
+                "Bạn chưa chọn chức năng!",
+                show_alert=True
+            )
+            return
+
+        bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        print(f"[Callback Error] {e}")
+        try:
+            bot.answer_callback_query(call.id, "Có lỗi xảy ra")
+        except:
+            pass
 
 
 # =================================
-# DISCORD BOT
+# FALLBACK
 # =================================
 
-class VCBot(discord.Client):
-
-    def __init__(self):
-
-        super().__init__(
-            intents=discord.Intents.default(),
-            application_id=int(APPLICATION_ID)
-        )
-
-        self.tree = app_commands.CommandTree(self)
-
-    async def setup_hook(self):
-
-        await self.tree.sync()
-
-
-bot = VCBot()
-
-
-@bot.event
-async def on_ready():
-
-    print("==============================")
-    print("VC UDID VERIFY")
-    print("BOT:", bot.user)
-    print("APPLICATION:", APPLICATION_ID)
-    print("STATUS: ONLINE")
-    print("==============================")
-
-
-# =================================
-# SETUP COMMAND
-# =================================
-
-@bot.tree.command(
-    name="setup",
-    description="Mo bang VC UDID VERIFY"
-)
-async def setup(interaction: discord.Interaction):
-
-    embed = discord.Embed(
-        title="VC UDID VERIFY",
-        description=(
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            " 1: LAY UDID\n"
-            "Nhan nut LAY UDID.\n\n"
-            " 2: XAC MINH\n"
-            "Nhan DA XAC MINH UDID.\n\n"
-            " 3: CHON CHUC NANG\n"
-            "NHAY TAM OPTIMION.\n\n"
-            "━━━━━━━━━━━━━━━━━━"
-        ),
-        color=discord.Color.from_rgb(40, 150, 255)
-    )
-
-    embed.set_footer(text="VC SYSTEM | UDID VERIFY")
-
-    await interaction.response.send_message(
-        embed=embed,
-        view=UDIDView()
+@bot.message_handler(func=lambda m: True)
+def fallback(message):
+    bot.reply_to(
+        message,
+        "Dùng /start hoặc /setup để mở menu."
     )
 
 
@@ -203,7 +190,12 @@ async def setup(interaction: discord.Interaction):
 # RUN
 # =================================
 
-if not TOKEN:
-    raise SystemExit("TOKEN KHONG DUOC DE TRONG!")
+if __name__ == "__main__":
+    if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        raise SystemExit("Chưa nhập BOT_TOKEN!")
 
-bot.run(TOKEN)
+    print("==============================")
+    print("VC UDID VERIFY - TELEGRAM")
+    print("STATUS: ONLINE")
+    print("==============================")
+    bot.infinity_polling(timeout=30, long_polling_timeout=20)
