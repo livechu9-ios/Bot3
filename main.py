@@ -8,7 +8,7 @@ import os
 import re
 import struct
 
-TOKEN = os.getenv("MTU2ODE0MzczMTIxODE5MDM1Nw.GC46pf.pulf_aXLy65QSshUCCcljh_fjFCVjbQeOLmg8U") or getpass.getpass("Nhap BOT TOKEN moi: ")
+TOKEN = os.getenv("MTU2ODE0MzczMTIxODE5MDM1Nw.GATcFg.iwP5RJ-7XUw1z5NFWjZpzHII1Y-k4WMg7dTxg0") or getpass.getpass("Nhap BOT TOKEN moi: ")
 
 FILE_PATTERN = re.compile(r"^assetindexer\.[A-Za-z0-9~]+$")
 MAX_SIZE = 20 * 1024 * 1024
@@ -34,6 +34,13 @@ LIMB_KEYWORDS = (
     "đùi", "đầu gối", "cổ chân", "bàn chân"
 )
 
+HEAD_KEYWORDS = ("head", "đầu", "dau", "skull", "sọ", "so")
+LEG_KEYWORDS = (
+    "leg", "chân", "chan", "foot", "thigh", "knee", "ankle",
+    "đùi", "dui", "đầu gối", "dau goi", "cổ chân", "co chan",
+    "bàn chân", "ban chan"
+)
+
 FUNCTIONS = [
     ("scaleFull", "Scale Full"),
     ("scaleHead", "Scale Head"),
@@ -44,7 +51,9 @@ FUNCTIONS = [
     ("flipHead", "Flip Head"),
     ("flipArm", "Flip Arm"),
     ("flipLeg", "Flip Leg"),
-    ("fixLimbs", "Fix Tay Chan Binh Thuong"),
+    ("legsToHead", "Legs To Head"),
+    ("fixLimbs", "Fix Tay Chan"),
+    ("resetAll", "Reset Tat Ca Ve Ban Goc"),
     ("checksum", "Fix Checksum")
 ]
 
@@ -114,7 +123,7 @@ def parse_binary(data):
 
 
 def select_bones(bones, function):
-    if function in ("scaleFull", "moveFull", "checksum", "fixLimbs"):
+    if function in ("scaleFull", "moveFull", "checksum", "fixLimbs", "resetAll"):
         return bones
     keywords = KEYWORDS.get(function, [])
     return [b for b in bones if any(w in b["name"] for w in keywords)]
@@ -142,6 +151,29 @@ def process_data(original, bones, function, value=None):
 
     if function == "checksum":
         return fix_checksum(data), 1
+
+    if function == "resetAll":
+        return bytearray(original), len(bones)
+
+    if function == "legsToHead":
+        heads = [b for b in bones
+                 if b["pos"] is not None
+                 and any(w in b["name"] for w in HEAD_KEYWORDS)]
+        legs = [b for b in bones
+                if b["pos"] is not None
+                and any(w in b["name"] for w in LEG_KEYWORDS)]
+
+        changed = 0
+        for h, l in zip(heads, legs):
+            hy = read_float(data, h["pos"] + 4)
+            ly = read_float(data, l["pos"] + 4)
+            if hy is None or ly is None:
+                continue
+            write_float(data, h["pos"] + 4, ly)
+            write_float(data, l["pos"] + 4, hy)
+            changed += 1
+
+        return fix_checksum(data), changed
 
     if function == "fixLimbs":
         changed = 0
