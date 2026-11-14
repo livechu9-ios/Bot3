@@ -52,7 +52,7 @@ FUNCTIONS = [
     ("flipArm", "Flip Arm"),
     ("flipLeg", "Flip Leg"),
     ("legsToHead", "Legs To Head"),
-    ("fixLimbs", "Fix Tay Chan"),
+    ("fixLimbs", "Fix Tay Chan Binh Thuong"),
     ("resetAll", "Reset Tat Ca Ve Ban Goc"),
     ("checksum", "Fix Checksum")
 ]
@@ -153,22 +153,44 @@ def process_data(original, bones, function, value=None):
         return fix_checksum(data), 1
 
     if function == "resetAll":
-        return bytearray(original), len(bones)
+        # Tra ve DUNG bytes goc nhu luc chua dung den.
+        # Van tinh lai checksum de chac chan file hop le.
+        restored = fix_checksum(bytearray(original))
+        return restored, len(bones)
 
     if function == "legsToHead":
+        # Tach rieng head va leg, loai bone khong co pos,
+        # va loai bone "head" bi nham la leg (tranh trung keyword).
         heads = [b for b in bones
                  if b["pos"] is not None
-                 and any(w in b["name"] for w in HEAD_KEYWORDS)]
+                 and any(w in b["name"] for w in HEAD_KEYWORDS)
+                 and not any(w in b["name"] for w in LEG_KEYWORDS)]
         legs = [b for b in bones
                 if b["pos"] is not None
                 and any(w in b["name"] for w in LEG_KEYWORDS)]
 
+        if not heads or not legs:
+            return fix_checksum(data), 0  # khong co gi de doi
+
         changed = 0
-        for h, l in zip(heads, legs):
+
+        # Neu so luong bang nhau: hoan doi theo cap.
+        # Neu lech: lay head dau tien lam chuan, doi Y voi TAT CA leg.
+        if len(heads) == len(legs):
+            pairs = list(zip(heads, legs))
+        else:
+            h = heads[0]
+            hy = read_float(data, h["pos"] + 4)
+            if hy is None:
+                return fix_checksum(data), 0
+            pairs = [(h, l) for l in legs]
+
+        for h, l in pairs:
             hy = read_float(data, h["pos"] + 4)
             ly = read_float(data, l["pos"] + 4)
             if hy is None or ly is None:
                 continue
+            # Chi doi Y (offset +4), giu nguyen X va Z
             write_float(data, h["pos"] + 4, ly)
             write_float(data, l["pos"] + 4, hy)
             changed += 1
@@ -351,6 +373,14 @@ class ToolView(discord.ui.View):
             )
 
             self.result = result
+
+            if changed == 0 and function not in ("resetAll", "checksum"):
+                await interaction.response.send_message(
+                    f"Khong tim thay bone phu hop cho chuc nang: {function}\n"
+                    f"File van duoc luu nguyen ban.",
+                    ephemeral=True
+                )
+                return
 
             await interaction.response.send_message(
                 f"XU LY THANH CONG\n"
